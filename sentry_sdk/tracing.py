@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 
 import sentry_sdk
 from sentry_sdk.consts import INSTRUMENTER
+from sentry_sdk.profiler import Profile
 from sentry_sdk.utils import logger
 from sentry_sdk._types import MYPY
 
@@ -21,7 +22,6 @@ if MYPY:
     from typing import Tuple
     from typing import Iterator
 
-    import sentry_sdk.profiler
     from sentry_sdk._types import Event, SamplingContext, MeasurementUnit
 
 BAGGAGE_HEADER_NAME = "baggage"
@@ -604,7 +604,7 @@ class Transaction(Span):
         self._third_party_tracestate = third_party_tracestate
         self._measurements = {}  # type: Dict[str, Any]
         self._contexts = {}  # type: Dict[str, Any]
-        self._profile = None  # type: Optional[sentry_sdk.profiler.Profile]
+        self._profile = None  # type: Optional[Profile]
         self._baggage = baggage
         # for profiling, we want to know on which thread a transaction is started
         # to accurately show the active thread in the UI
@@ -708,6 +708,7 @@ class Transaction(Span):
         }  # type: Event
 
         if hub.client is not None and self._profile is not None:
+            self._profile.stop()
             event["profile"] = self._profile
 
         if has_custom_measurements_enabled():
@@ -852,6 +853,12 @@ class Transaction(Span):
                     sample_rate=float(sample_rate),
                 )
             )
+
+    def _set_profiling_decision(self):
+        # type: () -> None
+        self._profile = Profile.from_transaction(self, self.hub)
+        if self._profile is not None:
+            self._profile.start()
 
 
 class NoOpSpan(Span):

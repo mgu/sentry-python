@@ -316,15 +316,23 @@ class Profile(object):
 
         transaction._profile = self
 
-    def __enter__(self):
+    def start(self):
         # type: () -> None
         self.start_ns = nanosecond_time()
         self.scheduler.start_profiling(self)
 
-    def __exit__(self, ty, value, tb):
-        # type: (Optional[Any], Optional[Any], Optional[Any]) -> None
+    def stop(self):
+        # type: () -> None
         self.scheduler.stop_profiling(self)
         self.stop_ns = nanosecond_time()
+
+    def __enter__(self):
+        # type: () -> None
+        self.start()
+
+    def __exit__(self, ty, value, tb):
+        # type: (Optional[Any], Optional[Any], Optional[Any]) -> None
+        self.stop()
 
     def write(self, ts, sample):
         # type: (int, RawSample) -> None
@@ -436,6 +444,15 @@ class Profile(object):
                 }
             ],
         }
+
+    @staticmethod
+    def from_transaction(transaction, hub):
+        # type: (sentry_sdk.tracing.Transaction, Optional[sentry_sdk.Hub]) -> Optional[Profile]
+        if not _should_profile(transaction, hub):
+            return None
+
+        assert _scheduler is not None
+        return Profile(_scheduler, transaction)
 
 
 class Scheduler(object):
@@ -632,7 +649,7 @@ class SleepScheduler(ThreadScheduler):
 
 
 def _should_profile(transaction, hub):
-    # type: (sentry_sdk.tracing.Transaction, sentry_sdk.Hub) -> bool
+    # type: (sentry_sdk.tracing.Transaction, Optional[sentry_sdk.Hub]) -> bool
 
     # The corresponding transaction was not sampled,
     # so don't generate a profile for it.
@@ -643,6 +660,7 @@ def _should_profile(transaction, hub):
     if _scheduler is None:
         return False
 
+    hub = hub or sentry_sdk.Hub.current
     client = hub.client
 
     # The client is None, so we can't get the sample rate.
@@ -663,12 +681,12 @@ def _should_profile(transaction, hub):
 @contextmanager
 def start_profiling(transaction, hub=None):
     # type: (sentry_sdk.tracing.Transaction, Optional[sentry_sdk.Hub]) -> Generator[None, None, None]
-    hub = hub or sentry_sdk.Hub.current
+
+    transaction._profile = Profile.from_transaction(transaction, hub)
 
     # if profiling was not enabled, this should be a noop
-    if _should_profile(transaction, hub):
-        assert _scheduler is not None
-        with Profile(_scheduler, transaction):
+    if transaction._profile is not None:
+        with transaction._profile:
             yield
     else:
         yield
